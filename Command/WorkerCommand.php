@@ -8,6 +8,7 @@ use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Input\InputOption;
 use Symfony\Component\Console\Output\OutputInterface;
 use Symfony\Component\Console\Input\ArrayInput;
+use Symfony\Component\Filesystem\Filesystem;
 
 class WorkerCommand extends ContainerAwareCommand
 {
@@ -42,19 +43,26 @@ class WorkerCommand extends ContainerAwareCommand
         $jobRepository = $em->getRepository('Scandio\JobQueueBundle\Entity\Job');
         $maxCount = $input->getOption('maxJobs');
 
+        $fl = new Filesystem();
+        $_lock   = '/tmp/worker_lock_'.$workerName;
+        $_unlock = '/tmp/worker_unlock_'.$workerName;
+        if( !$fl->exists( $_lock ) && !$fl->exists( $_unlock ) ){
+            touch( $_unlock );
+        }
+
         $count = 0;
 
         $deadlockMessage = '';
-        $isLocked = $lockRepository->isLocked($workerName);
+        $isLocked = $fl->exists( $_lock );
         if ($isLocked && $lockRepository->isDead($workerName)) {
             $pid = $lockRepository->getPid($workerName);
-            $lockRepository->release($workerName);
+            $fl->rename( $_lock, $_unlock );
             $deadlockMessage = "<error>$pid</error>";
         }
 
 
-        if (!$isLocked) {
-            $lockRepository->lock($workerName);
+        if (!$isLocked && $maxCount > 0) {
+            $fl->rename( $_unlock, $_lock );
 
             do {
                 if ($maxCount > 0 && $count >= $maxCount) {
@@ -71,7 +79,7 @@ class WorkerCommand extends ContainerAwareCommand
                 $count++;
             } while($job instanceof \Scandio\JobQueueBundle\Entity\Job);
 
-            $lockRepository->release($workerName);
+            $fl->rename( $_lock, $_unlock );
         }
 
         $message  = date('Y-m-d H:i:s').';';
